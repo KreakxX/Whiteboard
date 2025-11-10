@@ -53,12 +53,6 @@ func ws_handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(message)
 		broadcast(message)
 
-		// sending message back to the client like an echo not neccessary for this type shit
-		// if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-		// 	fmt.Println("Error writing message:", err)
-		// 	break
-		// }
-
 	}
 }
 
