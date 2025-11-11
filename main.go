@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -9,13 +10,13 @@ import (
 )
 
 type Session struct {
-	clients map[*websocket.Conn]bool
-	mu      sync.Mutex
+	Code    string
+	Clients map[*websocket.Conn]bool
+	Mu      sync.Mutex
 }
 
-var session = Session{
-	clients: make(map[*websocket.Conn]bool),
-}
+var sessions = make(map[string]*Session)
+var sessionsMu sync.Mutex
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -30,18 +31,10 @@ func ws_handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Error while upgrading", err)
 		return
 	}
+	var session *Session
 
+	// automatically closes the connection when using return
 	defer conn.Close()
-
-	session.mu.Lock()
-	session.clients[conn] = true
-	session.mu.Unlock()
-
-	defer func() {
-		session.mu.Lock()
-		delete(session.clients, conn)
-		session.mu.Unlock()
-	}()
 
 	for {
 		_, message, err := conn.ReadMessage()
@@ -50,25 +43,80 @@ func ws_handler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		fmt.Println(message)
-		broadcast(message)
+		var data map[string]string
+		json.Unmarshal(message, &data)
 
+		switch data["action"] {
+
+		case "create":
+			session = createNewSession()
+
+		case "join":
+			session = joinSession(data["code"], conn)
+
+		case "drawing":
+			broadcast(message, data["code"])
+
+		}
+
+	}
+	if session != nil {
+		session.Mu.Lock()
+		delete(session.Clients, conn)
+		session.Mu.Unlock()
 	}
 }
 
-func broadcast(message []byte) {
-	session.mu.Lock()
-	defer session.mu.Unlock()
+func broadcast(message []byte, code string) {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
 
-	for client := range session.clients {
+	var session *Session
+
+	session = sessions[code]
+
+	for client := range session.Clients {
 		err := client.WriteMessage(websocket.TextMessage, message)
 
 		if err != nil {
 			fmt.Println("Error while sending message to clients", err)
 			client.Close()
-			delete(session.clients, client)
+			delete(session.Clients, client)
 		}
 	}
+}
+
+func createNewSession() *Session {
+	code := "123456"
+
+	s := &Session{
+		Code:    code,
+		Clients: make(map[*websocket.Conn]bool),
+	}
+
+	sessionsMu.Lock()
+	sessions[code] = s
+	sessionsMu.Unlock()
+
+	return s
+
+}
+
+func joinSession(code string, conn *websocket.Conn) *Session {
+
+	sessionsMu.Lock()
+	s, exists := sessions[code]
+	sessionsMu.Unlock()
+
+	if !exists {
+		return nil
+	}
+
+	s.Mu.Lock()
+	s.Clients[conn] = true
+	s.Mu.Unlock()
+
+	return s
 }
 
 func main() {
